@@ -1,4 +1,3 @@
-// Stan code for multilevel mediation model
 functions{
   int[] count_per_id(int[] someIDs){
     int maxlev = max(someIDs);
@@ -30,28 +29,23 @@ functions{
     vector[3] betas = global[1:3];
     real sigma_y = global[4];
     int K = 3;
-    int M = (size(xr) - 1) / K;
+    int M = size(xr) / K;
     int Mx = xi[1];
-    vector[Mx] Y  = to_vector(xr[(M*0 + 2):(M*0 + Mx + 1)]);
-    vector[Mx] X1 = to_vector(xr[(M*1 + 2):(M*1 + Mx + 1)]);
-    vector[Mx] X2 = to_vector(xr[(M*2 + 2):(M*2 + Mx + 1)]);
-    int id[Mx] = xi[(M*0 + 2):(M*0 + Mx + 1)];
+    vector[Mx] Y  = to_vector(xr[(M*0 + 1):(M*0 + Mx)]);
+    vector[Mx] X1 = to_vector(xr[(M*1 + 1):(M*1 + Mx)]);
+    vector[Mx] X2 = to_vector(xr[(M*2 + 1):(M*2 + Mx)]);
+    int id[Mx] = xi[(M*0 + 3):(M*0 + Mx + 2)];
     int J = xi[2];
     matrix[J, K] U;
     vector[Mx] mu_y;
     real lp;
     real ll;
-    // print("shape Us");
-    // print(dims(Us));
-    // print("shape U");
-    // print(dims(U));
     for(j in 1:J){
       int start = (j - 1)*K + 1;
       int end = (j - 1)*K + K;
       U[j,] = to_row_vector(Us[start:end]);
     }
     
-    // Regressions
     mu_y = (betas[2] + U[id, 2]) .* X1 +
            (betas[3] + U[id, 3]) .* X2 +
            (betas[1] + U[id, 1]);
@@ -64,8 +58,8 @@ data {
     int<lower=1> N;             // Number of observations
     int<lower=1> J;             // Number of participants
     int<lower=1,upper=J> id[N]; // Participant IDs
-    vector[N] X1;                // Manipulated variable
-    vector[N] X2;                // Mediator
+    vector[N] X1;               // First independent variable
+    vector[N] X2;               // Second IV
     // Priors
     real prior_bs;
     real prior_tau_bs;
@@ -78,18 +72,17 @@ transformed data{
     int K = 3;                      // Number of predictors
     int nr = 3;                     // Number of real-valued variables
     int ni = 1;                     // Number of int-valued variables
-    int<lower=1> nshards = 20;
+    int<lower=1> nshards = 20;      // Number of shards
     int<lower=1, upper=nshards> shard[N] = shard_ids(id, nshards);
     int<lower=1, upper=N> counts[nshards] = count_per_id(shard);
     int<lower=1, upper=J> jcounts[nshards] = ids_per_shard(J, nshards);
     int<lower=1> M = max(counts);
-    int<lower=1> s_r[nshards] = rep_array(2, nshards);
+    int<lower=1> s_r[nshards] = rep_array(1, nshards);
     int<lower=1> s_i[nshards] = rep_array(3, nshards);
     int xi[nshards, M*ni + 2];  
-    real xr[nshards, M*nr + 1]; 
+    real xr[nshards, M*nr]; 
 
     //create shards
-    xr[,1] = counts;
     xi[,1] = counts;
     xi[,2] = jcounts;
     for (i in 1:N){
@@ -117,19 +110,11 @@ transformed parameters {
     matrix[J, K] U;
     vector[max(jcounts) * K] Us[nshards];
     U = (diag_pre_multiply(Tau, L_Omega) * z_U)';
-    // print("size Us");
-    // print(dims(Us));
     {
        for(j in 1:J){
          int sh = (j - 1) % nshards + 1;
          int start = ((j - 1) / nshards) * K + 1;
          int end = ((j - 1) / nshards) * K + K ;
-         // print("Start");
-         // print(start);
-         // print("End");
-         // print(end);
-         // print("Shard");
-         // print(sh);
          Us[sh, start:end] = to_vector(U[j, ]);
        } 
     }
