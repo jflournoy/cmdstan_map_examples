@@ -24,34 +24,46 @@ functions{
     }
     return(ids_count);
   }
-  vector gi_glm(vector global, vector Us,
+  vector gi_glm(vector global, vector z_Us,
                real[] xr, int[] xi) {
+    int K = 3;
+    int J = xi[2];
     vector[3] betas = global[1:3];
     real sigma_y = global[4];
-    int K = 3;
+    vector[K] Tau = global[5:7];
+    vector[K*(K-1)/2 + K] L_Omega_vec = global[8:(8+K*(K-1)/2 + K - 1)];
+    matrix[K, J] z_U;
+    matrix[K, K] L_Omega = rep_matrix(0, K, K);
     int M = size(xr) / K;
     int Mx = xi[1];
     vector[Mx] Y  = to_vector(xr[(M*0 + 1):(M*0 + Mx)]);
     vector[Mx] X1 = to_vector(xr[(M*1 + 1):(M*1 + Mx)]);
     vector[Mx] X2 = to_vector(xr[(M*2 + 1):(M*2 + Mx)]);
     int id[Mx] = xi[(M*0 + 3):(M*0 + Mx + 2)];
-    int J = xi[2];
+    
     matrix[J, K] U;
     vector[Mx] mu_y;
     real lp;
     real ll;
+    
     for(j in 1:J){
       int start = (j - 1)*K + 1;
       int end = (j - 1)*K + K;
-      U[j,] = to_row_vector(Us[start:end]);
+      z_U[,j] = z_Us[start:end];
     }
-    
+    for (k in 1:K){
+      int km1 = k - 1;
+      int start = k + (km1*(km1 - 1)/2);
+      L_Omega[k, 1:k] = to_row_vector(L_Omega_vec[start:(start + km1)]);
+    }
+    U = (diag_pre_multiply(Tau, L_Omega) * z_U)';
     mu_y = (betas[2] + U[id, 2]) .* X1 +
            (betas[3] + U[id, 3]) .* X2 +
            (betas[1] + U[id, 1]);
-    
+    //to_vector(z_U) ~ normal(0, 1);
+    lp = normal_lpdf(to_vector(z_U) | 0, 1);
     ll = normal_lpdf(Y | mu_y, sigma_y);
-    return [ll]';
+    return [lp + ll]';
   }
 }
 data {
@@ -108,15 +120,20 @@ parameters{
 transformed parameters {
     // Participant-level varying effects
     matrix[J, K] U;
-    vector[max(jcounts) * K] Us[nshards];
-    U = (diag_pre_multiply(Tau, L_Omega) * z_U)';
+    vector[K*(K-1)/2 + K] L_Omega_vec;
+    vector[max(jcounts) * K] z_Us[nshards];
     {
-       for(j in 1:J){
-         int sh = (j - 1) % nshards + 1;
-         int start = ((j - 1) / nshards) * K + 1;
-         int end = ((j - 1) / nshards) * K + K ;
-         Us[sh, start:end] = to_vector(U[j, ]);
-       } 
+      for (k in 1:K){
+        int km1 = k - 1;
+        int start = k + (km1*(km1 - 1)/2);
+        L_Omega_vec[start:(start + km1)] = to_vector(L_Omega[k, 1:k]);
+      }
+      for(j in 1:J){
+        int sh = (j - 1) % nshards + 1;
+        int start = ((j - 1) / nshards) * K + 1;
+        int end = ((j - 1) / nshards) * K + K ;
+        z_Us[sh, start:end] = z_U[, j];
+      } 
     }
 }
 model {
@@ -128,10 +145,12 @@ model {
     Tau ~ cauchy(0, prior_tau_bs);   // u_b0
     L_Omega ~ lkj_corr_cholesky(prior_lkj_shape);
     // Allow vectorized sampling of varying effects via stdzd z_U
-    to_vector(z_U) ~ normal(0, 1);
+    
     // Data model
     if(SIMULATE == 0){
-        target += sum(map_rect(gi_glm, append_row(betas, sigma_y), Us, xr, xi));
+        target += sum(map_rect(gi_glm, append_row(append_row(betas, sigma_y), 
+                                                  append_row(Tau, L_Omega_vec)), 
+                               z_Us, xr, xi));
     }
 }
 generated quantities{
